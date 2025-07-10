@@ -20,6 +20,7 @@ jobs:
 
       - run:
           name: Network path verification with whois
+          when: always
           command: |
             echo "=== Network Path Analysis ===" | tee ~/diagnostics/network_path_analysis.txt
             
