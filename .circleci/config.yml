@@ -84,20 +84,20 @@ jobs:
       - run:
           name: GitHub connectivity tests
           command: |
-            echo "=== Ping Test ===" | tee ~/diagnostics/ping_test.txt
-            ping -c 10 github.com | tee -a ~/diagnostics/ping_test.txt || true
+            #echo "=== Ping Test ===" | tee ~/diagnostics/ping_test.txt
+            #ping -c 10 github.com | tee -a ~/diagnostics/ping_test.txt || true
+            #
+            #echo -e "\n=== MTU Discovery ===" | tee -a ~/diagnostics/mtu_test.txt
+            #for size in 1500 1492 1480 1472 1464 1436; do
+            #  echo "Testing MTU size $size:" | tee -a ~/diagnostics/mtu_test.txt
+            #  ping -c 3 -D -s $size github.com 2>&1 | tee -a ~/diagnostics/mtu_test.txt || true
+            #done
             
-            echo -e "\n=== MTU Discovery ===" | tee -a ~/diagnostics/mtu_test.txt
-            for size in 1500 1492 1480 1472 1464 1436; do
-              echo "Testing MTU size $size:" | tee -a ~/diagnostics/mtu_test.txt
-              ping -c 3 -D -s $size github.com 2>&1 | tee -a ~/diagnostics/mtu_test.txt || true
-            done
+            #echo -e "\n=== Traceroute ===" | tee ~/diagnostics/traceroute.txt
+            #traceroute -n -m 20 github.com | tee -a ~/diagnostics/traceroute.txt || true
             
-            echo -e "\n=== Traceroute ===" | tee ~/diagnostics/traceroute.txt
-            traceroute -n -m 20 github.com | tee -a ~/diagnostics/traceroute.txt || true
-            
-            echo -e "\n=== SSH Test ===" | tee ~/diagnostics/ssh_test.txt
-            ssh -vvv -o ConnectTimeout=10 -o StrictHostKeyChecking=no git@github.com 2>&1 | tee -a ~/diagnostics/ssh_test.txt || true
+            #echo -e "\n=== SSH Test ===" | tee ~/diagnostics/ssh_test.txt
+            #ssh -vvv -o ConnectTimeout=10 -o StrictHostKeyChecking=no git@github.com 2>&1 | tee -a ~/diagnostics/ssh_test.txt || true
 
       - run:
           name: HTTP/HTTPS speed test
