@@ -13,24 +13,89 @@ jobs:
       xcode: 16.4.0
     resource_class: << parameters.resource_class >>
     steps:
-      - run:
-          name: Check for traffic shaping
-          command: |
-            # Check if there's a bandwidth limit set
-            sudo pfctl -s all 2>/dev/null | grep -i "bandwidth\|rate" || echo "No pfctl rules found"
-            
-            # Check network interface queue
-            netstat -I en0 -q
-            
-            # Check for any throttling software
-            ps aux | grep -i "throttle\|limit\|shape" | grep -v grep || echo "No throttling processes found"
-            
-            # Check interface capabilities
-            ifconfig en0 | grep -i "media:"
 
       - run:
           name: Create diagnostics directory
           command: mkdir -p ~/diagnostics
+
+      - run:
+          name: Network path verification with whois
+          command: |
+            echo "=== Network Path Analysis ===" | tee ~/diagnostics/network_path_analysis.txt
+            
+            # Get our current location
+            echo -e "\n=== Current Instance Location ===" | tee -a ~/diagnostics/network_path_analysis.txt
+            curl -s https://ipapi.co/json | jq '.' | tee -a ~/diagnostics/network_path_analysis.txt || \
+              curl -s https://ipapi.co/json | tee -a ~/diagnostics/network_path_analysis.txt
+            
+            # Run traceroute and capture IPs
+            echo -e "\n=== Traceroute to GitHub ===" | tee -a ~/diagnostics/network_path_analysis.txt
+            traceroute -n -m 15 github.com 2>&1 | tee ~/diagnostics/traceroute_raw.txt
+            
+            # Extract unique IPs from traceroute (excluding private IPs)
+            echo -e "\n=== Whois Analysis of Route ===" | tee -a ~/diagnostics/network_path_analysis.txt
+            
+            # Parse traceroute and get IPs
+            cat ~/diagnostics/traceroute_raw.txt | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | \
+              grep -v '^192\.168\.' | grep -v '^10\.' | grep -v '^172\.' | \
+              sort -u > ~/diagnostics/public_ips.txt
+            
+            # Run whois on each IP
+            while read -r ip; do
+              if [ ! -z "$ip" ]; then
+                echo -e "\n--- Whois for $ip ---" | tee -a ~/diagnostics/network_path_analysis.txt
+                whois "$ip" 2>/dev/null | grep -E "^(OrgName:|org-name:|netname:|NetName:|country:|Country:|address:|Address:|descr:|OrgTechCity:|City:)" | \
+                  head -10 | tee -a ~/diagnostics/network_path_analysis.txt || echo "Whois lookup failed for $ip"
+              fi
+            done < ~/diagnostics/public_ips.txt
+            
+            # Specific checks for key IPs we've seen
+            echo -e "\n=== Detailed Analysis of Key IPs ===" | tee -a ~/diagnostics/network_path_analysis.txt
+            
+            # For M4 Pro suspicious IPs
+            for ip in 62.115.40.30 62.115.136.201 213.248.67.47 38.23.49.203; do
+              echo -e "\n--- Detailed check for $ip ---" | tee -a ~/diagnostics/network_path_analysis.txt
+              whois "$ip" 2>/dev/null | grep -E "(OrgName|Country|NetRange|CIDR|abuse|tech-c)" | \
+                grep -v "^#" | head -15 | tee -a ~/diagnostics/network_path_analysis.txt
+            done
+            
+            # Check GitHub's IP
+            echo -e "\n=== GitHub Server Location ===" | tee -a ~/diagnostics/network_path_analysis.txt
+            GITHUB_IP=$(nslookup github.com | grep -A1 "Non-authoritative" | tail -1 | awk '{print $2}')
+            echo "GitHub IP: $GITHUB_IP" | tee -a ~/diagnostics/network_path_analysis.txt
+            whois "$GITHUB_IP" 2>/dev/null | grep -E "(OrgName|Country|City|Address)" | \
+              head -10 | tee -a ~/diagnostics/network_path_analysis.txt
+            
+            # AS Path analysis
+            echo -e "\n=== AS Path Analysis ===" | tee -a ~/diagnostics/network_path_analysis.txt
+            # Install mtr if not available
+            which mtr || brew install mtr || echo "mtr not available"
+            
+            if which mtr > /dev/null; then
+              mtr -r -c 5 -w -b github.com | tee -a ~/diagnostics/network_path_analysis.txt
+            fi
+
+      - run:
+          name: Geographic latency test
+          command: |
+            echo "=== Geographic Latency Test ===" | tee ~/diagnostics/geo_latency.txt
+            
+            # Test latency to different regions
+            echo -e "\n--- US East (Virginia) ---" | tee -a ~/diagnostics/geo_latency.txt
+            ping -c 5 ec2.us-east-1.amazonaws.com | tee -a ~/diagnostics/geo_latency.txt
+            
+            echo -e "\n--- US West (California) ---" | tee -a ~/diagnostics/geo_latency.txt
+            ping -c 5 ec2.us-west-1.amazonaws.com | tee -a ~/diagnostics/geo_latency.txt
+            
+            echo -e "\n--- Europe (Ireland) ---" | tee -a ~/diagnostics/geo_latency.txt
+            ping -c 5 ec2.eu-west-1.amazonaws.com | tee -a ~/diagnostics/geo_latency.txt
+            
+            echo -e "\n--- Europe (Frankfurt) ---" | tee -a ~/diagnostics/geo_latency.txt
+            ping -c 5 ec2.eu-central-1.amazonaws.com | tee -a ~/diagnostics/geo_latency.txt
+            
+            # Check which region we're closest to
+            echo -e "\n=== Latency Summary ===" | tee -a ~/diagnostics/geo_latency.txt
+            grep "round-trip" ~/diagnostics/geo_latency.txt | tee -a ~/diagnostics/geo_latency_summary.txt
 
       - run:
           name: Pre-checkout network diagnostics
