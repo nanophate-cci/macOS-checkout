@@ -13,8 +13,23 @@ jobs:
       xcode: 16.4.0
     resource_class: << parameters.resource_class >>
     steps:
-      - run: sudo sysctl net.inet.tcp.tso=0
-      
+      - run:
+          name: TCP Performance Tuning
+          command: |
+            # Increase TCP buffer sizes
+            sudo sysctl -w net.inet.tcp.sendspace=4194304
+            sudo sysctl -w net.inet.tcp.recvspace=4194304
+            
+            # Enable TCP auto-tuning
+            sudo sysctl -w net.inet.tcp.doautorcvbuf=1
+            sudo sysctl -w net.inet.tcp.autorcvbufmax=4194304
+            sudo sysctl -w net.inet.tcp.autosndbufmax=4194304
+            
+            # Adjust initial congestion window
+            sudo sysctl -w net.inet.tcp.local_slowstart_flightsize=16
+            
+            # Verify settings
+            sysctl net.inet.tcp | grep -E "sendspace|recvspace|autorcvbuf|autosndbuf|slowstart"      
       - run:
           name: Create diagnostics directory
           command: mkdir -p ~/diagnostics
