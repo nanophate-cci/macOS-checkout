@@ -13,6 +13,8 @@ jobs:
       xcode: 16.4.0
     resource_class: << parameters.resource_class >>
     steps:
+      - run: sudo sysctl net.inet.tcp.tso=0
+      
       - run:
           name: Create diagnostics directory
           command: mkdir -p ~/diagnostics
