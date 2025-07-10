@@ -14,23 +14,171 @@ jobs:
     resource_class: << parameters.resource_class >>
     steps:
       - run:
-          name: check tcp log
-          command: sudo tcpdump -i any -n
+          name: Create diagnostics directory
+          command: mkdir -p ~/diagnostics
+
+      - run:
+          name: Pre-checkout network diagnostics
+          command: |
+            echo "=== Resource Class: << parameters.resource_class >> ===" | tee ~/diagnostics/resource_info.txt
+            echo "=== Date: $(date) ===" | tee -a ~/diagnostics/resource_info.txt
+            
+            # System info
+            sysctl machdep.cpu.brand_string | tee -a ~/diagnostics/system_info.txt
+            sw_vers | tee -a ~/diagnostics/system_info.txt
+            
+            # Network interfaces
+            ifconfig -a | tee ~/diagnostics/ifconfig.txt
+            networksetup -listallnetworkservices | tee ~/diagnostics/network_services.txt
+            
+            # MTU settings
+            networksetup -getMTU en0 | tee ~/diagnostics/mtu_info.txt
+            
+            # DNS and routing
+            cat /etc/resolv.conf | tee ~/diagnostics/resolv.txt
+            netstat -nr | tee ~/diagnostics/routes.txt
+            scutil --proxy | tee ~/diagnostics/proxy_settings.txt
+            
+            # TCP settings
+            sysctl net.inet.tcp | tee ~/diagnostics/tcp_settings.txt
+            
+            # Initial network stats
+            netstat -s -p tcp | tee ~/diagnostics/tcp_stats_before.txt
+            netstat -i | tee ~/diagnostics/interface_stats_before.txt
+
+      - run:
+          name: DNS resolution test
+          command: |
+            # Test DNS resolution time
+            { time nslookup github.com; } 2>&1 | tee ~/diagnostics/dns_test.txt
+            { time nslookup github.com 8.8.8.8; } 2>&1 | tee -a ~/diagnostics/dns_test.txt
+
+      - run:
+          name: Start detailed tcpdump
+          command: |
+            # Capture with more details and filters
+            sudo tcpdump -i any -n -v -s 0 \
+              '(host github.com or host 140.82.114.4 or host 140.82.113.4 or host 140.82.112.4) and (port 22 or port 443)' \
+              -w ~/diagnostics/github_traffic.pcap &
+            echo $! > ~/diagnostics/tcpdump.pid
           background: true
+
+      - run:
+          name: Start network monitoring
+          command: |
+            # Create monitor script
+            echo '#!/bin/bash' > ~/diagnostics/monitor.sh
+            echo 'while true; do' >> ~/diagnostics/monitor.sh
+            echo '  echo "=== $(date) ===" >> ~/diagnostics/network_monitor.log' >> ~/diagnostics/monitor.sh
+            echo '  netstat -I en0 | tail -1 >> ~/diagnostics/network_monitor.log' >> ~/diagnostics/monitor.sh
+            echo '  netstat -s -p tcp | grep -E "retransmit|timeout|reset|duplicate" >> ~/diagnostics/network_monitor.log' >> ~/diagnostics/monitor.sh
+            echo '  echo "" >> ~/diagnostics/network_monitor.log' >> ~/diagnostics/monitor.sh
+            echo '  sleep 2' >> ~/diagnostics/monitor.sh
+            echo 'done' >> ~/diagnostics/monitor.sh
+            
+            chmod +x ~/diagnostics/monitor.sh
+            ~/diagnostics/monitor.sh &
+            echo $! > ~/diagnostics/monitor.pid
+          background: true
+
+      - run:
+          name: GitHub connectivity tests
+          command: |
+            echo "=== Ping Test ===" | tee ~/diagnostics/ping_test.txt
+            ping -c 10 github.com | tee -a ~/diagnostics/ping_test.txt || true
+            
+            echo -e "\n=== MTU Discovery ===" | tee -a ~/diagnostics/mtu_test.txt
+            for size in 1500 1492 1480 1472 1464 1436; do
+              echo "Testing MTU size $size:" | tee -a ~/diagnostics/mtu_test.txt
+              ping -c 3 -D -s $size github.com 2>&1 | tee -a ~/diagnostics/mtu_test.txt || true
+            done
+            
+            echo -e "\n=== Traceroute ===" | tee ~/diagnostics/traceroute.txt
+            traceroute -n -m 20 github.com | tee -a ~/diagnostics/traceroute.txt || true
+            
+            echo -e "\n=== SSH Test ===" | tee ~/diagnostics/ssh_test.txt
+            ssh -vvv -o ConnectTimeout=10 -o StrictHostKeyChecking=no git@github.com 2>&1 | tee -a ~/diagnostics/ssh_test.txt || true
+
+      - run:
+          name: HTTP/HTTPS speed test
+          command: |
+            echo "=== HTTPS Speed Test ===" | tee ~/diagnostics/speed_test.txt
+            curl -o /dev/null -w "DNS Lookup: %{time_namelookup}s\nConnect: %{time_connect}s\nSSL Handshake: %{time_appconnect}s\nStart Transfer: %{time_starttransfer}s\nTotal: %{time_total}s\nSpeed: %{speed_download} bytes/sec\n" \
+              https://github.com 2>&1 | tee -a ~/diagnostics/speed_test.txt
+
+      - run:
+          name: Start checkout timer
+          command: date +%s > ~/diagnostics/checkout_start.txt
+
       - checkout
+
       - run:
-          name: check user log
-          command: tail -f ~/Library/Logs/*
-          background: true
+          name: End checkout timer
+          command: |
+            START=$(cat ~/diagnostics/checkout_start.txt)
+            END=$(date +%s)
+            DURATION=$((END - START))
+            echo "Checkout duration: $DURATION seconds" | tee ~/diagnostics/checkout_duration.txt
+
       - run:
-          name: check system log
-          command: tail -f /private/var/log/**/*.log
-          background: true
-      - run: sysctl machdep.cpu.brand_string
+          name: Post-checkout diagnostics
+          command: |
+            # Stop background processes
+            if [ -f ~/diagnostics/tcpdump.pid ]; then
+              sudo kill $(cat ~/diagnostics/tcpdump.pid) || true
+            fi
+            if [ -f ~/diagnostics/monitor.pid ]; then
+              kill $(cat ~/diagnostics/monitor.pid) || true
+            fi
+            
+            # Collect final stats
+            netstat -s -p tcp | tee ~/diagnostics/tcp_stats_after.txt
+            netstat -i | tee ~/diagnostics/interface_stats_after.txt
+            
+            # Analyze tcpdump
+            if [ -f ~/diagnostics/github_traffic.pcap ]; then
+              echo "=== Packet Summary ===" | tee ~/diagnostics/pcap_analysis.txt
+              sudo tcpdump -r ~/diagnostics/github_traffic.pcap -nn | wc -l | tee -a ~/diagnostics/pcap_analysis.txt
+              
+              echo -e "\n=== TCP Retransmissions ===" | tee -a ~/diagnostics/pcap_analysis.txt
+              sudo tcpdump -r ~/diagnostics/github_traffic.pcap -nn 'tcp[tcpflags] & (tcp-syn|tcp-fin) != 0' 2>/dev/null | tee -a ~/diagnostics/pcap_analysis.txt || true
+              
+              echo -e "\n=== Connection Summary ===" | tee -a ~/diagnostics/pcap_analysis.txt
+              sudo tcpdump -r ~/diagnostics/github_traffic.pcap -nn -q | head -100 | tee -a ~/diagnostics/pcap_analysis.txt
+            fi
+
+      - run:
+          name: Generate summary report
+          command: |
+            echo "=== Network Diagnostics Summary ===" > ~/diagnostics/summary.txt
+            echo "Resource Class: << parameters.resource_class >>" >> ~/diagnostics/summary.txt
+            echo "Date: $(date)" >> ~/diagnostics/summary.txt
+            echo "" >> ~/diagnostics/summary.txt
+            echo "Checkout Duration: $(cat ~/diagnostics/checkout_duration.txt)" >> ~/diagnostics/summary.txt
+            echo "" >> ~/diagnostics/summary.txt
+            echo "=== TCP Statistics Diff ===" >> ~/diagnostics/summary.txt
+            
+            # Compare before/after TCP stats
+            diff ~/diagnostics/tcp_stats_before.txt ~/diagnostics/tcp_stats_after.txt >> ~/diagnostics/summary.txt || true
+            
+            echo -e "\n=== Key Metrics ===" >> ~/diagnostics/summary.txt
+            grep -E "retransmit|timeout|duplicate" ~/diagnostics/tcp_stats_after.txt >> ~/diagnostics/summary.txt || true
+
+      - store_artifacts:
+          path: ~/diagnostics
+          destination: network-diagnostics
+
+      - run:
+          name: Check system logs (limited)
+          command: |
+            # Only recent logs to avoid too much data
+            sudo tail -1000 /private/var/log/system.log > ~/diagnostics/system.log 2>/dev/null || true
+            sudo tail -1000 /private/var/log/wifi.log > ~/diagnostics/wifi.log 2>/dev/null || true
+
 workflows:
   workflow-mac:
     jobs:
       - mac-os:
           matrix:
             parameters:
-              resource_class: ["macos.m1.medium.gen1", "m2pro.medium" ,"m2pro.large", "m4pro.medium"]
+              resource_class: ["macos.m1.medium.gen1", "m2pro.medium", "m2pro.large", "m4pro.medium"]
