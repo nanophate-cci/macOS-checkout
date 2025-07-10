@@ -19,69 +19,147 @@ jobs:
           command: mkdir -p ~/diagnostics
 
       - run:
-          name: Network path verification with whois
-          when: always
+          name: Smart network path analysis
+          when: always  # This ensures the step always runs even if previous steps fail
           command: |
             echo "=== Network Path Analysis ===" | tee ~/diagnostics/network_path_analysis.txt
+            echo "Resource Class: << parameters.resource_class >>" | tee -a ~/diagnostics/network_path_analysis.txt
             
-            # Get our current location
-            echo -e "\n=== Current Instance Location ===" | tee -a ~/diagnostics/network_path_analysis.txt
-            curl -s https://ipapi.co/json | python3 -m json.tool | tee -a ~/diagnostics/network_path_analysis.txt || \
-              curl -s https://ipapi.co/json | tee -a ~/diagnostics/network_path_analysis.txt
+            # Get our IP without rate-limited service
+            MY_IP=$(curl -s ifconfig.me || curl -s icanhazip.com || curl -s checkip.amazonaws.com || echo "IP lookup failed")
+            echo "Instance IP: $MY_IP" | tee -a ~/diagnostics/network_path_analysis.txt
             
-            # Run traceroute and capture IPs
+            # Run traceroute
             echo -e "\n=== Traceroute to GitHub ===" | tee -a ~/diagnostics/network_path_analysis.txt
-            traceroute -n -m 15 github.com 2>&1 | tee ~/diagnostics/traceroute_raw.txt
+            traceroute -n -m 15 github.com 2>&1 | tee ~/diagnostics/traceroute_raw.txt || true
             
-            # Extract unique IPs from traceroute (excluding private IPs)
-            echo -e "\n=== Whois Analysis of Route ===" | tee -a ~/diagnostics/network_path_analysis.txt
+            # Extract public IPs (excluding private and AWS internal)
+            echo -e "\n=== Analyzing Route IPs ===" | tee -a ~/diagnostics/network_path_analysis.txt
             
-            # Parse traceroute and get IPs
-            cat ~/diagnostics/traceroute_raw.txt | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | \
+            # Get IPs and analyze
+            grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' ~/diagnostics/traceroute_raw.txt | \
               grep -v '^192\.168\.' | grep -v '^10\.' | grep -v '^172\.' | \
-              sort -u > ~/diagnostics/public_ips.txt
+              grep -v '^240\.' | sort -u > ~/diagnostics/public_ips.txt || true
             
-            # Run whois on each IP
+            # Analyze each IP
             while read -r ip; do
               if [ ! -z "$ip" ]; then
-                echo -e "\n--- Whois for $ip ---" | tee -a ~/diagnostics/network_path_analysis.txt
-                whois "$ip" 2>/dev/null | grep -E "^(OrgName:|org-name:|netname:|NetName:|country:|Country:|address:|Address:|descr:|OrgTechCity:|City:)" | \
-                  head -10 | tee -a ~/diagnostics/network_path_analysis.txt || echo "Whois lookup failed for $ip"
-              fi
-            done < ~/diagnostics/public_ips.txt
+                echo -e "\n--- Checking $ip ---" | tee -a ~/diagnostics/network_path_analysis.txt
+                
+                # Try multiple sources for IP info
+                # First, try ipinfo.io (better for AS info)
+                curl -s "https://ipinfo.io/$ip" | python3 -c "
+                import json, sys
+                try:
+                    data = json.load(sys.stdin)
+                    print(f'  Location: {data.get(\"city\", \"Unknown\")}, {data.get(\"region\", \"Unknown\")}, {data.get(\"country\", \"Unknown\")}')
+                    print(f'  Org: {data.get(\"org\", \"Unknown\")}')
+                    print(f'  AS: {data.get(\"as\", \"Unknown\")}')
+                except: pass
+                " 2>/dev/null || echo "  Failed to get info for $ip"
+                        fi
+                      done < ~/diagnostics/public_ips.txt || true
+                      
+                      # Check for European routing indicators
+                      echo -e "\n=== Route Analysis Summary ===" | tee -a ~/diagnostics/network_path_analysis.txt
+                      
+                      # Look for Telia (AS1299) or high latency jumps
+                      if grep -q "62\.115\." ~/diagnostics/traceroute_raw.txt 2>/dev/null; then
+                        echo "⚠️  EUROPEAN ROUTING DETECTED: Telia backbone (62.115.x.x)" | tee -a ~/diagnostics/network_path_analysis.txt
+                      fi
+                      
+                      if grep -q "213\.248\." ~/diagnostics/traceroute_raw.txt 2>/dev/null; then
+                        echo "⚠️  EUROPEAN ROUTING DETECTED: EU transit network (213.248.x.x)" | tee -a ~/diagnostics/network_path_analysis.txt
+                      fi
+                      
+                      # Check latency jumps
+                      echo -e "\n=== Latency Analysis ===" | tee -a ~/diagnostics/network_path_analysis.txt
+                      awk '/ms/ {
+                        for(i=1; i<=NF; i++) {
+                          if($i ~ /ms$/) {
+                            gsub(/ms/, "", $i)
+                            if($i > 10) {
+                              print "High latency detected at hop " NR ": " $i "ms"
+                            }
+                          }
+                        }
+                      }' ~/diagnostics/traceroute_raw.txt 2>/dev/null || echo "No latency analysis available"
+                      
+                      # Always exit successfully
+                      exit 0
+
+      - run:
+          name: AWS region detection
+          when: always
+          command: |
+            echo "=== AWS Region Detection ===" | tee ~/diagnostics/aws_region.txt
             
-            # Specific checks for key IPs we've seen
-            echo -e "\n=== Detailed Analysis of Key IPs ===" | tee -a ~/diagnostics/network_path_analysis.txt
+            # Try to detect AWS region from metadata (if available)
+            curl -s --max-time 2 http://169.254.169.254/latest/meta-data/placement/region 2>/dev/null | tee -a ~/diagnostics/aws_region.txt || \
+              echo "Not in AWS or metadata not accessible" | tee -a ~/diagnostics/aws_region.txt
             
-            # For M4 Pro suspicious IPs
-            for ip in 62.115.40.30 62.115.136.201 213.248.67.47 38.23.49.203; do
-              echo -e "\n--- Detailed check for $ip ---" | tee -a ~/diagnostics/network_path_analysis.txt
-              whois "$ip" 2>/dev/null | grep -E "(OrgName|Country|NetRange|CIDR|abuse|tech-c)" | \
-                grep -v "^#" | head -15 | tee -a ~/diagnostics/network_path_analysis.txt
+            echo -e "\n=== Latency to AWS Regions ===" | tee -a ~/diagnostics/aws_region.txt
+            
+            # Test major regions
+            for region in us-east-1 us-west-2 eu-west-1 eu-central-1; do
+              echo -e "\n--- Testing $region ---" | tee -a ~/diagnostics/aws_region.txt
+              ping -c 3 -W 2 ec2.$region.amazonaws.com 2>&1 | grep -E "round-trip|time=" | tee -a ~/diagnostics/aws_region.txt || echo "Failed to ping $region"
             done
             
-            # Check GitHub's IP
-            echo -e "\n=== GitHub Server Location ===" | tee -a ~/diagnostics/network_path_analysis.txt
-            GITHUB_IP=$(nslookup github.com | grep -A1 "Non-authoritative" | tail -1 | awk '{print $2}')
-            echo "GitHub IP: $GITHUB_IP" | tee -a ~/diagnostics/network_path_analysis.txt
-            whois "$GITHUB_IP" 2>/dev/null | grep -E "(OrgName|Country|City|Address)" | \
-              head -10 | tee -a ~/diagnostics/network_path_analysis.txt
+            # Find closest region
+            echo -e "\n=== Closest AWS Region ===" | tee -a ~/diagnostics/aws_region.txt
+            grep "round-trip" ~/diagnostics/aws_region.txt 2>/dev/null | sort -t'=' -k4 -n | head -1 || echo "Could not determine closest region"
             
-            # AS Path analysis with sudo mtr (if available)
-            echo -e "\n=== AS Path Analysis ===" | tee -a ~/diagnostics/network_path_analysis.txt
+            # Always succeed
+            exit 0
+
+      - run:
+          name: Compare with known problematic IPs
+          when: always
+          command: |
+            echo "=== Checking for Known Issues ===" | tee ~/diagnostics/known_issues.txt
             
-            # Try mtr with sudo
-            if which mtr > /dev/null; then
-              echo "Running mtr with sudo..." | tee -a ~/diagnostics/network_path_analysis.txt
-              sudo mtr -r -c 5 -w -b github.com 2>&1 | tee -a ~/diagnostics/network_path_analysis.txt || \
-                echo "mtr failed even with sudo, skipping" | tee -a ~/diagnostics/network_path_analysis.txt
+            # Check our route
+            if [ -f ~/diagnostics/traceroute_raw.txt ]; then
+              # Look for known problematic networks
+              if grep -q "62\.115\." ~/diagnostics/traceroute_raw.txt 2>/dev/null; then
+                echo "Found 62.115.x.x: Telia Europe (causes trans-Atlantic routing)" | tee -a ~/diagnostics/known_issues.txt
+              fi
+              
+              if grep -q "213\.248\." ~/diagnostics/traceroute_raw.txt 2>/dev/null; then
+                echo "Found 213.248.x.x: European transit network" | tee -a ~/diagnostics/known_issues.txt
+              fi
+              
+              if grep -q "240\.3\." ~/diagnostics/traceroute_raw.txt 2>/dev/null; then
+                echo "Found 240.3.x.x: AWS internal (good)" | tee -a ~/diagnostics/known_issues.txt
+              fi
+              
+              if grep -q "151\.148\." ~/diagnostics/traceroute_raw.txt 2>/dev/null; then
+                echo "Found 151.148.x.x: AWS US-East (good)" | tee -a ~/diagnostics/known_issues.txt
+              fi
+              
+              if grep -q "52\.46\." ~/diagnostics/traceroute_raw.txt 2>/dev/null; then
+                echo "Found 52.46.x.x: AWS US-East (good)" | tee -a ~/diagnostics/known_issues.txt
+              fi
+              
+              if grep -q "38\.23\." ~/diagnostics/traceroute_raw.txt 2>/dev/null; then
+                echo "Found 38.23.x.x: Needs investigation" | tee -a ~/diagnostics/known_issues.txt
+              fi
             else
-              echo "mtr not available" | tee -a ~/diagnostics/network_path_analysis.txt
+              echo "No traceroute data available" | tee -a ~/diagnostics/known_issues.txt
             fi
             
-            # Alternative: Use traceroute with AS lookup
-            echo -e "\n=== Alternative AS Path lookup ===" | tee -a ~/diagnostics/network_path_analysis.txt
-            traceroute -n -A github.com 2>&1 | head -20 | tee -a ~/diagnostics/network_path_analysis.txt || true
+            # Final verdict
+            echo -e "\n=== Routing Verdict ===" | tee -a ~/diagnostics/known_issues.txt
+            if grep -q "Telia Europe\|European transit" ~/diagnostics/known_issues.txt 2>/dev/null; then
+              echo "❌ BAD ROUTING: Traffic goes through Europe to reach GitHub" | tee -a ~/diagnostics/known_issues.txt
+              echo "   This causes ~10x latency and bandwidth constraints" | tee -a ~/diagnostics/known_issues.txt
+            else
+              echo "✅ GOOD ROUTING: Direct path to GitHub" | tee -a ~/diagnostics/known_issues.txt
+            fi
+            
+            # Always succeed
+            exit 0
 
       - run:
           name: Geographic latency test
@@ -189,25 +267,6 @@ jobs:
             timeout 300 ~/diagnostics/monitor.sh &
             echo $! > ~/diagnostics/monitor.pid
           background: true
-
-      # Commented out as requested
-      # - run:
-      #     name: GitHub connectivity tests
-      #     command: |
-      #       echo "=== Ping Test ===" | tee ~/diagnostics/ping_test.txt
-      #       ping -c 10 github.com | tee -a ~/diagnostics/ping_test.txt || true
-      #       
-      #       echo -e "\n=== MTU Discovery ===" | tee -a ~/diagnostics/mtu_test.txt
-      #       for size in 1500 1492 1480 1472 1464 1436; do
-      #         echo "Testing MTU size $size:" | tee -a ~/diagnostics/mtu_test.txt
-      #         ping -c 3 -D -s $size github.com 2>&1 | tee -a ~/diagnostics/mtu_test.txt || true
-      #       done
-      #       
-      #       echo -e "\n=== Traceroute ===" | tee ~/diagnostics/traceroute.txt
-      #       traceroute -n -m 20 github.com | tee -a ~/diagnostics/traceroute.txt || true
-      #       
-      #       echo -e "\n=== SSH Test ===" | tee ~/diagnostics/ssh_test.txt
-      #       ssh -vvv -o ConnectTimeout=10 -o StrictHostKeyChecking=no git@github.com 2>&1 | tee -a ~/diagnostics/ssh_test.txt || true
 
       - run:
           name: HTTP/HTTPS speed test
