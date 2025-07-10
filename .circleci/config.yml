@@ -57,9 +57,10 @@ jobs:
           name: Start detailed tcpdump
           command: |
             # Capture with more details and filters
-            sudo tcpdump -i any -n -v -s 0 \
-              '(host github.com or host 140.82.114.4 or host 140.82.113.4 or host 140.82.112.4) and (port 22 or port 443)' \
-              -w ~/diagnostics/github_traffic.pcap &
+            # Using timeout to auto-stop after a reasonable time (5 minutes)
+            sudo timeout 300 tcpdump -i any -n -v -s 0 \
+              '(host github.com or host 140.82.114.4 or host 140.82.113.4 or host 140.82.112.4 or host 140.82.114.3) and (port 22 or port 443)' \
+              -w ~/diagnostics/github_traffic.pcap 2>&1 | tee ~/diagnostics/tcpdump.log &
             echo $! > ~/diagnostics/tcpdump.pid
           background: true
 
@@ -77,27 +78,28 @@ jobs:
             echo 'done' >> ~/diagnostics/monitor.sh
             
             chmod +x ~/diagnostics/monitor.sh
-            ~/diagnostics/monitor.sh &
+            timeout 300 ~/diagnostics/monitor.sh &
             echo $! > ~/diagnostics/monitor.pid
           background: true
 
-      - run:
-          name: GitHub connectivity tests
-          command: |
-            #echo "=== Ping Test ===" | tee ~/diagnostics/ping_test.txt
-            #ping -c 10 github.com | tee -a ~/diagnostics/ping_test.txt || true
-            #
-            #echo -e "\n=== MTU Discovery ===" | tee -a ~/diagnostics/mtu_test.txt
-            #for size in 1500 1492 1480 1472 1464 1436; do
-            #  echo "Testing MTU size $size:" | tee -a ~/diagnostics/mtu_test.txt
-            #  ping -c 3 -D -s $size github.com 2>&1 | tee -a ~/diagnostics/mtu_test.txt || true
-            #done
-            
-            #echo -e "\n=== Traceroute ===" | tee ~/diagnostics/traceroute.txt
-            #traceroute -n -m 20 github.com | tee -a ~/diagnostics/traceroute.txt || true
-            
-            #echo -e "\n=== SSH Test ===" | tee ~/diagnostics/ssh_test.txt
-            #ssh -vvv -o ConnectTimeout=10 -o StrictHostKeyChecking=no git@github.com 2>&1 | tee -a ~/diagnostics/ssh_test.txt || true
+      # Commented out as requested
+      # - run:
+      #     name: GitHub connectivity tests
+      #     command: |
+      #       echo "=== Ping Test ===" | tee ~/diagnostics/ping_test.txt
+      #       ping -c 10 github.com | tee -a ~/diagnostics/ping_test.txt || true
+      #       
+      #       echo -e "\n=== MTU Discovery ===" | tee -a ~/diagnostics/mtu_test.txt
+      #       for size in 1500 1492 1480 1472 1464 1436; do
+      #         echo "Testing MTU size $size:" | tee -a ~/diagnostics/mtu_test.txt
+      #         ping -c 3 -D -s $size github.com 2>&1 | tee -a ~/diagnostics/mtu_test.txt || true
+      #       done
+      #       
+      #       echo -e "\n=== Traceroute ===" | tee ~/diagnostics/traceroute.txt
+      #       traceroute -n -m 20 github.com | tee -a ~/diagnostics/traceroute.txt || true
+      #       
+      #       echo -e "\n=== SSH Test ===" | tee ~/diagnostics/ssh_test.txt
+      #       ssh -vvv -o ConnectTimeout=10 -o StrictHostKeyChecking=no git@github.com 2>&1 | tee -a ~/diagnostics/ssh_test.txt || true
 
       - run:
           name: HTTP/HTTPS speed test
@@ -123,28 +125,42 @@ jobs:
       - run:
           name: Post-checkout diagnostics
           command: |
-            # Stop background processes
+            # Wait a moment for any final packets
+            sleep 2
+            
+            # Gracefully stop tcpdump by sending SIGTERM to the timeout process
             if [ -f ~/diagnostics/tcpdump.pid ]; then
-              sudo kill $(cat ~/diagnostics/tcpdump.pid) || true
+              TCPDUMP_PID=$(cat ~/diagnostics/tcpdump.pid)
+              # Find the actual tcpdump process (child of timeout)
+              ACTUAL_TCPDUMP_PID=$(pgrep -P $TCPDUMP_PID tcpdump || echo "")
+              if [ -n "$ACTUAL_TCPDUMP_PID" ]; then
+                sudo kill -TERM $ACTUAL_TCPDUMP_PID 2>/dev/null || true
+              fi
+              kill -TERM $TCPDUMP_PID 2>/dev/null || true
+              sleep 1
             fi
+            
+            # Stop monitor script
             if [ -f ~/diagnostics/monitor.pid ]; then
-              kill $(cat ~/diagnostics/monitor.pid) || true
+              kill -TERM $(cat ~/diagnostics/monitor.pid) 2>/dev/null || true
             fi
             
             # Collect final stats
             netstat -s -p tcp | tee ~/diagnostics/tcp_stats_after.txt
             netstat -i | tee ~/diagnostics/interface_stats_after.txt
             
-            # Analyze tcpdump
-            if [ -f ~/diagnostics/github_traffic.pcap ]; then
+            # Analyze tcpdump if file exists and is valid
+            if [ -f ~/diagnostics/github_traffic.pcap ] && [ -s ~/diagnostics/github_traffic.pcap ]; then
               echo "=== Packet Summary ===" | tee ~/diagnostics/pcap_analysis.txt
-              sudo tcpdump -r ~/diagnostics/github_traffic.pcap -nn | wc -l | tee -a ~/diagnostics/pcap_analysis.txt
+              sudo tcpdump -r ~/diagnostics/github_traffic.pcap -nn 2>/dev/null | wc -l | tee -a ~/diagnostics/pcap_analysis.txt || echo "0 packets captured"
               
-              echo -e "\n=== TCP Retransmissions ===" | tee -a ~/diagnostics/pcap_analysis.txt
-              sudo tcpdump -r ~/diagnostics/github_traffic.pcap -nn 'tcp[tcpflags] & (tcp-syn|tcp-fin) != 0' 2>/dev/null | tee -a ~/diagnostics/pcap_analysis.txt || true
+              echo -e "\n=== TCP Flags Summary ===" | tee -a ~/diagnostics/pcap_analysis.txt
+              sudo tcpdump -r ~/diagnostics/github_traffic.pcap -nn 2>/dev/null | grep -E "Flags \[" | head -20 | tee -a ~/diagnostics/pcap_analysis.txt || true
               
               echo -e "\n=== Connection Summary ===" | tee -a ~/diagnostics/pcap_analysis.txt
-              sudo tcpdump -r ~/diagnostics/github_traffic.pcap -nn -q | head -100 | tee -a ~/diagnostics/pcap_analysis.txt
+              sudo tcpdump -r ~/diagnostics/github_traffic.pcap -nn -q 2>/dev/null | head -50 | tee -a ~/diagnostics/pcap_analysis.txt || true
+            else
+              echo "No valid pcap file found or file is empty" | tee ~/diagnostics/pcap_analysis.txt
             fi
 
       - run:
