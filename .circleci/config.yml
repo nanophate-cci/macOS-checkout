@@ -14,22 +14,20 @@ jobs:
     resource_class: << parameters.resource_class >>
     steps:
       - run:
-          name: TCP Performance Tuning
+          name: Check for traffic shaping
           command: |
-            # Increase TCP buffer sizes
-            sudo sysctl -w net.inet.tcp.sendspace=4194304
-            sudo sysctl -w net.inet.tcp.recvspace=4194304
+            # Check if there's a bandwidth limit set
+            sudo pfctl -s all 2>/dev/null | grep -i "bandwidth\|rate" || echo "No pfctl rules found"
             
-            # Enable TCP auto-tuning
-            sudo sysctl -w net.inet.tcp.doautorcvbuf=1
-            sudo sysctl -w net.inet.tcp.autorcvbufmax=4194304
-            sudo sysctl -w net.inet.tcp.autosndbufmax=4194304
+            # Check network interface queue
+            netstat -I en0 -q
             
-            # Adjust initial congestion window
-            sudo sysctl -w net.inet.tcp.local_slowstart_flightsize=16
+            # Check for any throttling software
+            ps aux | grep -i "throttle\|limit\|shape" | grep -v grep || echo "No throttling processes found"
             
-            # Verify settings
-            sysctl net.inet.tcp | grep -E "sendspace|recvspace|autorcvbuf|autosndbuf|slowstart"      
+            # Check interface capabilities
+            ifconfig en0 | grep -i "media:"
+
       - run:
           name: Create diagnostics directory
           command: mkdir -p ~/diagnostics
