@@ -1,0 +1,36 @@
+version: 2.1
+
+orbs:
+  macos: circleci/macos@2.5.4
+
+jobs:
+  mac-os:
+    parameters:
+      resource_class:
+        default: "m4pro.medium"
+        type: string
+    macos:
+      xcode: 16.4.0
+    resource_class: << parameters.resource_class >>
+    steps:
+      - run:
+          name: check tcp log
+          command: sudo tcpdump -i any -n
+          background: true
+      - checkout
+      - run:
+          name: check user log
+          command: tail -f ~/Library/Logs/*
+          background: true
+      - run:
+          name: check system log
+          command: tail -f /private/var/log/**/*.log
+          background: true
+      - run: sysctl machdep.cpu.brand_string
+workflows:
+  workflow-mac:
+    jobs:
+      - mac-os:
+          matrix:
+            parameters:
+              resource_class: ["macos.m1.medium.gen1", "m2pro.medium" ,"m2pro.large", "m4pro.medium"]
