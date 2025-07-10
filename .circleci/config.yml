@@ -25,7 +25,7 @@ jobs:
             
             # Get our current location
             echo -e "\n=== Current Instance Location ===" | tee -a ~/diagnostics/network_path_analysis.txt
-            curl -s https://ipapi.co/json | jq '.' | tee -a ~/diagnostics/network_path_analysis.txt || \
+            curl -s https://ipapi.co/json | python3 -m json.tool | tee -a ~/diagnostics/network_path_analysis.txt || \
               curl -s https://ipapi.co/json | tee -a ~/diagnostics/network_path_analysis.txt
             
             # Run traceroute and capture IPs
@@ -66,14 +66,21 @@ jobs:
             whois "$GITHUB_IP" 2>/dev/null | grep -E "(OrgName|Country|City|Address)" | \
               head -10 | tee -a ~/diagnostics/network_path_analysis.txt
             
-            # AS Path analysis
+            # AS Path analysis with sudo mtr (if available)
             echo -e "\n=== AS Path Analysis ===" | tee -a ~/diagnostics/network_path_analysis.txt
-            # Install mtr if not available
-            which mtr || brew install mtr || echo "mtr not available"
             
+            # Try mtr with sudo
             if which mtr > /dev/null; then
-              mtr -r -c 5 -w -b github.com | tee -a ~/diagnostics/network_path_analysis.txt
+              echo "Running mtr with sudo..." | tee -a ~/diagnostics/network_path_analysis.txt
+              sudo mtr -r -c 5 -w -b github.com 2>&1 | tee -a ~/diagnostics/network_path_analysis.txt || \
+                echo "mtr failed even with sudo, skipping" | tee -a ~/diagnostics/network_path_analysis.txt
+            else
+              echo "mtr not available" | tee -a ~/diagnostics/network_path_analysis.txt
             fi
+            
+            # Alternative: Use traceroute with AS lookup
+            echo -e "\n=== Alternative AS Path lookup ===" | tee -a ~/diagnostics/network_path_analysis.txt
+            traceroute -n -A github.com 2>&1 | head -20 | tee -a ~/diagnostics/network_path_analysis.txt || true
 
       - run:
           name: Geographic latency test
@@ -82,21 +89,41 @@ jobs:
             
             # Test latency to different regions
             echo -e "\n--- US East (Virginia) ---" | tee -a ~/diagnostics/geo_latency.txt
-            ping -c 5 ec2.us-east-1.amazonaws.com | tee -a ~/diagnostics/geo_latency.txt
+            ping -c 5 ec2.us-east-1.amazonaws.com 2>&1 | tee -a ~/diagnostics/geo_latency.txt || true
             
             echo -e "\n--- US West (California) ---" | tee -a ~/diagnostics/geo_latency.txt
-            ping -c 5 ec2.us-west-1.amazonaws.com | tee -a ~/diagnostics/geo_latency.txt
+            ping -c 5 ec2.us-west-1.amazonaws.com 2>&1 | tee -a ~/diagnostics/geo_latency.txt || true
             
             echo -e "\n--- Europe (Ireland) ---" | tee -a ~/diagnostics/geo_latency.txt
-            ping -c 5 ec2.eu-west-1.amazonaws.com | tee -a ~/diagnostics/geo_latency.txt
+            ping -c 5 ec2.eu-west-1.amazonaws.com 2>&1 | tee -a ~/diagnostics/geo_latency.txt || true
             
             echo -e "\n--- Europe (Frankfurt) ---" | tee -a ~/diagnostics/geo_latency.txt
-            ping -c 5 ec2.eu-central-1.amazonaws.com | tee -a ~/diagnostics/geo_latency.txt
+            ping -c 5 ec2.eu-central-1.amazonaws.com 2>&1 | tee -a ~/diagnostics/geo_latency.txt || true
+            
+            echo -e "\n--- Asia Pacific (Tokyo) ---" | tee -a ~/diagnostics/geo_latency.txt
+            ping -c 5 ec2.ap-northeast-1.amazonaws.com 2>&1 | tee -a ~/diagnostics/geo_latency.txt || true
             
             # Check which region we're closest to
             echo -e "\n=== Latency Summary ===" | tee -a ~/diagnostics/geo_latency.txt
-            grep "round-trip" ~/diagnostics/geo_latency.txt | tee -a ~/diagnostics/geo_latency_summary.txt
+            grep -E "round-trip|avg" ~/diagnostics/geo_latency.txt | tee -a ~/diagnostics/geo_latency_summary.txt || true
 
+      - run:
+          name: Simple IP geolocation check
+          command: |
+            echo "=== Quick IP Location Check ===" | tee ~/diagnostics/ip_locations.txt
+            
+            # Our IP
+            MY_IP=$(curl -s ifconfig.me)
+            echo -e "\nOur IP: $MY_IP" | tee -a ~/diagnostics/ip_locations.txt
+            curl -s "https://ipapi.co/$MY_IP/json/" | python3 -m json.tool | tee -a ~/diagnostics/ip_locations.txt
+            
+            # Check suspicious IPs from M4 Pro route
+            for ip in 62.115.40.30 213.248.67.47; do
+              echo -e "\n\nChecking $ip:" | tee -a ~/diagnostics/ip_locations.txt
+              curl -s "https://ipapi.co/$ip/json/" | python3 -m json.tool | tee -a ~/diagnostics/ip_locations.txt || \
+                echo "Failed to lookup $ip" | tee -a ~/diagnostics/ip_locations.txt
+            done
+      
       - run:
           name: Pre-checkout network diagnostics
           command: |
