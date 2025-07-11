@@ -49,44 +49,44 @@ jobs:
                 # Try multiple sources for IP info
                 # First, try ipinfo.io (better for AS info)
                 curl -s "https://ipinfo.io/$ip" | python3 -c "
-import json, sys
-try:
-    data = json.load(sys.stdin)
-    print(f'  Location: {data.get(\"city\", \"Unknown\")}, {data.get(\"region\", \"Unknown\")}, {data.get(\"country\", \"Unknown\")}')
-    print(f'  Org: {data.get(\"org\", \"Unknown\")}')
-    print(f'  AS: {data.get(\"as\", \"Unknown\")}')
-except: pass
-" 2>/dev/null || echo "  Failed to get info for $ip"
-              fi
-            done < ~/diagnostics/public_ips.txt || true
-            
-            # Check for European routing indicators
-            echo -e "\n=== Route Analysis Summary ===" | tee -a ~/diagnostics/network_path_analysis.txt
-            
-            # Look for Telia (AS1299) or high latency jumps
-            if grep -q "62\.115\." ~/diagnostics/traceroute_raw.txt 2>/dev/null; then
-              echo "⚠️  EUROPEAN ROUTING DETECTED: Telia backbone (62.115.x.x)" | tee -a ~/diagnostics/network_path_analysis.txt
-            fi
-            
-            if grep -q "213\.248\." ~/diagnostics/traceroute_raw.txt 2>/dev/null; then
-              echo "⚠️  EUROPEAN ROUTING DETECTED: EU transit network (213.248.x.x)" | tee -a ~/diagnostics/network_path_analysis.txt
-            fi
-            
-            # Check latency jumps
-            echo -e "\n=== Latency Analysis ===" | tee -a ~/diagnostics/network_path_analysis.txt
-            awk '/ms/ {
-              for(i=1; i<=NF; i++) {
-                if($i ~ /ms$/) {
-                  gsub(/ms/, "", $i)
-                  if($i > 10) {
-                    print "High latency detected at hop " NR ": " $i "ms"
-                  }
-                }
-              }
-            }' ~/diagnostics/traceroute_raw.txt 2>/dev/null || echo "No latency analysis available"
-            
-            # Always exit successfully
-            exit 0
+                  import json, sys
+                  try:
+                      data = json.load(sys.stdin)
+                      print(f'  Location: {data.get(\"city\", \"Unknown\")}, {data.get(\"region\", \"Unknown\")}, {data.get(\"country\", \"Unknown\")}')
+                      print(f'  Org: {data.get(\"org\", \"Unknown\")}')
+                      print(f'  AS: {data.get(\"as\", \"Unknown\")}')
+                  except: pass
+                  " 2>/dev/null || echo "  Failed to get info for $ip"
+                                fi
+                              done < ~/diagnostics/public_ips.txt || true
+                              
+                              # Check for European routing indicators
+                              echo -e "\n=== Route Analysis Summary ===" | tee -a ~/diagnostics/network_path_analysis.txt
+                              
+                              # Look for Telia (AS1299) or high latency jumps
+                              if grep -q "62\.115\." ~/diagnostics/traceroute_raw.txt 2>/dev/null; then
+                                echo "⚠️  EUROPEAN ROUTING DETECTED: Telia backbone (62.115.x.x)" | tee -a ~/diagnostics/network_path_analysis.txt
+                              fi
+                              
+                              if grep -q "213\.248\." ~/diagnostics/traceroute_raw.txt 2>/dev/null; then
+                                echo "⚠️  EUROPEAN ROUTING DETECTED: EU transit network (213.248.x.x)" | tee -a ~/diagnostics/network_path_analysis.txt
+                              fi
+                              
+                              # Check latency jumps
+                              echo -e "\n=== Latency Analysis ===" | tee -a ~/diagnostics/network_path_analysis.txt
+                              awk '/ms/ {
+                                for(i=1; i<=NF; i++) {
+                                  if($i ~ /ms$/) {
+                                    gsub(/ms/, "", $i)
+                                    if($i > 10) {
+                                      print "High latency detected at hop " NR ": " $i "ms"
+                                    }
+                                  }
+                                }
+                              }' ~/diagnostics/traceroute_raw.txt 2>/dev/null || echo "No latency analysis available"
+                              
+                              # Always exit successfully
+                              exit 0
 
       - run:
           name: AWS region detection
@@ -350,15 +350,13 @@ except: pass
       - run:
           name: Create comprehensive report for engineering
           command: |
-            cat > ~/diagnostics/ENGINEERING_REPORT.txt << 'EOF'
-            # CircleCI M4 Pro Network Routing Issue Report
-            
-            ## Executive Summary
-            M4 Pro instances route through Europe to reach GitHub, causing 14x slower performance.
-            
-            ## Test Results
-            EOF
-            
+            # Create report using echo instead of heredoc to avoid CircleCI parsing issues
+            echo "# CircleCI M4 Pro Network Routing Issue Report" > ~/diagnostics/ENGINEERING_REPORT.txt
+            echo "" >> ~/diagnostics/ENGINEERING_REPORT.txt
+            echo "## Executive Summary" >> ~/diagnostics/ENGINEERING_REPORT.txt
+            echo "M4 Pro instances route through Europe to reach GitHub, causing 14x slower performance." >> ~/diagnostics/ENGINEERING_REPORT.txt
+            echo "" >> ~/diagnostics/ENGINEERING_REPORT.txt
+            echo "## Test Results" >> ~/diagnostics/ENGINEERING_REPORT.txt
             echo "### Resource Class: << parameters.resource_class >>" >> ~/diagnostics/ENGINEERING_REPORT.txt
             echo "Date: $(date)" >> ~/diagnostics/ENGINEERING_REPORT.txt
             echo "" >> ~/diagnostics/ENGINEERING_REPORT.txt
@@ -399,16 +397,14 @@ except: pass
           when: always
           command: |
             # Create JSON summary for easy comparison
-            cat > ~/diagnostics/summary.json << EOF
-            {
-              "resource_class": "<< parameters.resource_class >>",
-              "checkout_seconds": $(grep -oE '[0-9]+' ~/diagnostics/checkout_duration.txt || echo "null"),
-              "ip_address": "$(curl -s ifconfig.me)",
-              "closest_aws_region": "$(grep -m1 "round-trip" ~/diagnostics/aws_region.txt | cut -d' ' -f3 || echo "unknown")",
-              "has_european_routing": $(grep -q "EUROPEAN ROUTING DETECTED" ~/diagnostics/network_path_analysis.txt && echo "true" || echo "false"),
-              "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-            }
-            EOF
+            echo "{" > ~/diagnostics/summary.json
+            echo "  \"resource_class\": \"<< parameters.resource_class >>\"," >> ~/diagnostics/summary.json
+            echo "  \"checkout_seconds\": $(grep -oE '[0-9]+' ~/diagnostics/checkout_duration.txt 2>/dev/null || echo "null")," >> ~/diagnostics/summary.json
+            echo "  \"ip_address\": \"$(curl -s ifconfig.me)\"," >> ~/diagnostics/summary.json
+            echo "  \"closest_aws_region\": \"$(grep -m1 'round-trip' ~/diagnostics/aws_region.txt 2>/dev/null | cut -d' ' -f3 || echo 'unknown')\"," >> ~/diagnostics/summary.json
+            echo "  \"has_european_routing\": $(grep -q 'EUROPEAN ROUTING DETECTED' ~/diagnostics/network_path_analysis.txt 2>/dev/null && echo 'true' || echo 'false')," >> ~/diagnostics/summary.json
+            echo "  \"timestamp\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"" >> ~/diagnostics/summary.json
+            echo "}" >> ~/diagnostics/summary.json
 
       - store_artifacts:
           path: ~/diagnostics
