@@ -20,7 +20,7 @@ jobs:
 
       - run:
           name: Smart network path analysis
-          when: always  # This ensures the step always runs even if previous steps fail
+          when: always
           command: |
             echo "=== Network Path Analysis ===" | tee ~/diagnostics/network_path_analysis.txt
             echo "Resource Class: << parameters.resource_class >>" | tee -a ~/diagnostics/network_path_analysis.txt
@@ -49,44 +49,44 @@ jobs:
                 # Try multiple sources for IP info
                 # First, try ipinfo.io (better for AS info)
                 curl -s "https://ipinfo.io/$ip" | python3 -c "
-                import json, sys
-                try:
-                    data = json.load(sys.stdin)
-                    print(f'  Location: {data.get(\"city\", \"Unknown\")}, {data.get(\"region\", \"Unknown\")}, {data.get(\"country\", \"Unknown\")}')
-                    print(f'  Org: {data.get(\"org\", \"Unknown\")}')
-                    print(f'  AS: {data.get(\"as\", \"Unknown\")}')
-                except: pass
-                " 2>/dev/null || echo "  Failed to get info for $ip"
-                        fi
-                      done < ~/diagnostics/public_ips.txt || true
-                      
-                      # Check for European routing indicators
-                      echo -e "\n=== Route Analysis Summary ===" | tee -a ~/diagnostics/network_path_analysis.txt
-                      
-                      # Look for Telia (AS1299) or high latency jumps
-                      if grep -q "62\.115\." ~/diagnostics/traceroute_raw.txt 2>/dev/null; then
-                        echo "⚠️  EUROPEAN ROUTING DETECTED: Telia backbone (62.115.x.x)" | tee -a ~/diagnostics/network_path_analysis.txt
-                      fi
-                      
-                      if grep -q "213\.248\." ~/diagnostics/traceroute_raw.txt 2>/dev/null; then
-                        echo "⚠️  EUROPEAN ROUTING DETECTED: EU transit network (213.248.x.x)" | tee -a ~/diagnostics/network_path_analysis.txt
-                      fi
-                      
-                      # Check latency jumps
-                      echo -e "\n=== Latency Analysis ===" | tee -a ~/diagnostics/network_path_analysis.txt
-                      awk '/ms/ {
-                        for(i=1; i<=NF; i++) {
-                          if($i ~ /ms$/) {
-                            gsub(/ms/, "", $i)
-                            if($i > 10) {
-                              print "High latency detected at hop " NR ": " $i "ms"
-                            }
-                          }
-                        }
-                      }' ~/diagnostics/traceroute_raw.txt 2>/dev/null || echo "No latency analysis available"
-                      
-                      # Always exit successfully
-                      exit 0
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    print(f'  Location: {data.get(\"city\", \"Unknown\")}, {data.get(\"region\", \"Unknown\")}, {data.get(\"country\", \"Unknown\")}')
+    print(f'  Org: {data.get(\"org\", \"Unknown\")}')
+    print(f'  AS: {data.get(\"as\", \"Unknown\")}')
+except: pass
+" 2>/dev/null || echo "  Failed to get info for $ip"
+              fi
+            done < ~/diagnostics/public_ips.txt || true
+            
+            # Check for European routing indicators
+            echo -e "\n=== Route Analysis Summary ===" | tee -a ~/diagnostics/network_path_analysis.txt
+            
+            # Look for Telia (AS1299) or high latency jumps
+            if grep -q "62\.115\." ~/diagnostics/traceroute_raw.txt 2>/dev/null; then
+              echo "⚠️  EUROPEAN ROUTING DETECTED: Telia backbone (62.115.x.x)" | tee -a ~/diagnostics/network_path_analysis.txt
+            fi
+            
+            if grep -q "213\.248\." ~/diagnostics/traceroute_raw.txt 2>/dev/null; then
+              echo "⚠️  EUROPEAN ROUTING DETECTED: EU transit network (213.248.x.x)" | tee -a ~/diagnostics/network_path_analysis.txt
+            fi
+            
+            # Check latency jumps
+            echo -e "\n=== Latency Analysis ===" | tee -a ~/diagnostics/network_path_analysis.txt
+            awk '/ms/ {
+              for(i=1; i<=NF; i++) {
+                if($i ~ /ms$/) {
+                  gsub(/ms/, "", $i)
+                  if($i > 10) {
+                    print "High latency detected at hop " NR ": " $i "ms"
+                  }
+                }
+              }
+            }' ~/diagnostics/traceroute_raw.txt 2>/dev/null || echo "No latency analysis available"
+            
+            # Always exit successfully
+            exit 0
 
       - run:
           name: AWS region detection
@@ -143,7 +143,7 @@ jobs:
               fi
               
               if grep -q "38\.23\." ~/diagnostics/traceroute_raw.txt 2>/dev/null; then
-                echo "Found 38.23.x.x: Needs investigation" | tee -a ~/diagnostics/known_issues.txt
+                echo "Found 38.23.x.x: Cogent Communications" | tee -a ~/diagnostics/known_issues.txt
               fi
             else
               echo "No traceroute data available" | tee -a ~/diagnostics/known_issues.txt
@@ -206,31 +206,31 @@ jobs:
       - run:
           name: Pre-checkout network diagnostics
           command: |
-            echo "=== Resource Class: << parameters.resource_class >> ===" | tee ~/diagnostics/resource_info.txt
-            echo "=== Date: $(date) ===" | tee -a ~/diagnostics/resource_info.txt
+            echo "=== Resource Class: << parameters.resource_class >> ===" | tee ~/diagnostics/pre_checkout_info.txt
+            echo "=== Date: $(date) ===" | tee -a ~/diagnostics/pre_checkout_info.txt
             
             # System info
-            sysctl machdep.cpu.brand_string | tee -a ~/diagnostics/system_info.txt
-            sw_vers | tee -a ~/diagnostics/system_info.txt
+            sysctl machdep.cpu.brand_string | tee -a ~/diagnostics/pre_checkout_info.txt
+            sw_vers | tee -a ~/diagnostics/pre_checkout_info.txt
             
             # Network interfaces
-            ifconfig -a | tee ~/diagnostics/ifconfig.txt
-            networksetup -listallnetworkservices | tee ~/diagnostics/network_services.txt
+            ifconfig -a | tee -a ~/diagnostics/pre_checkout_info.txt
+            networksetup -listallnetworkservices | tee -a ~/diagnostics/pre_checkout_info.txt
             
             # MTU settings
-            networksetup -getMTU en0 | tee ~/diagnostics/mtu_info.txt
+            networksetup -getMTU en0 | tee -a ~/diagnostics/pre_checkout_info.txt
             
             # DNS and routing
-            cat /etc/resolv.conf | tee ~/diagnostics/resolv.txt
-            netstat -nr | tee ~/diagnostics/routes.txt
-            scutil --proxy | tee ~/diagnostics/proxy_settings.txt
+            cat /etc/resolv.conf | tee -a ~/diagnostics/pre_checkout_info.txt
+            netstat -nr | tee -a ~/diagnostics/pre_checkout_info.txt
+            scutil --proxy | tee -a ~/diagnostics/pre_checkout_info.txt
             
             # TCP settings
-            sysctl net.inet.tcp | tee ~/diagnostics/tcp_settings.txt
+            sysctl net.inet.tcp | tee -a ~/diagnostics/pre_checkout_info.txt
             
             # Initial network stats
-            netstat -s -p tcp | tee ~/diagnostics/tcp_stats_before.txt
-            netstat -i | tee ~/diagnostics/interface_stats_before.txt
+            netstat -s -p tcp | tee -a ~/diagnostics/pre_checkout_info.txt
+            netstat -i | tee -a ~/diagnostics/pre_checkout_info.txt
 
       - run:
           name: DNS resolution test
@@ -313,21 +313,21 @@ jobs:
             fi
             
             # Collect final stats
-            netstat -s -p tcp | tee ~/diagnostics/tcp_stats_after.txt
-            netstat -i | tee ~/diagnostics/interface_stats_after.txt
+            netstat -s -p tcp | tee -a ~/diagnostics/post_checkout_info.txt
+            netstat -i | tee -a ~/diagnostics/post_checkout_info.txt
             
             # Analyze tcpdump if file exists and is valid
             if [ -f ~/diagnostics/github_traffic.pcap ] && [ -s ~/diagnostics/github_traffic.pcap ]; then
-              echo "=== Packet Summary ===" | tee ~/diagnostics/pcap_analysis.txt
-              sudo tcpdump -r ~/diagnostics/github_traffic.pcap -nn 2>/dev/null | wc -l | tee -a ~/diagnostics/pcap_analysis.txt || echo "0 packets captured"
+              echo "=== Packet Summary ===" | tee -a ~/diagnostics/post_checkout_info.txt
+              sudo tcpdump -r ~/diagnostics/github_traffic.pcap -nn 2>/dev/null | wc -l | tee -a ~/diagnostics/post_checkout_info.txt || echo "0 packets captured"
               
-              echo -e "\n=== TCP Flags Summary ===" | tee -a ~/diagnostics/pcap_analysis.txt
-              sudo tcpdump -r ~/diagnostics/github_traffic.pcap -nn 2>/dev/null | grep -E "Flags \[" | head -20 | tee -a ~/diagnostics/pcap_analysis.txt || true
+              echo -e "\n=== TCP Flags Summary ===" | tee -a ~/diagnostics/post_checkout_info.txt
+              sudo tcpdump -r ~/diagnostics/github_traffic.pcap -nn 2>/dev/null | grep -E "Flags \[" | head -20 | tee -a ~/diagnostics/post_checkout_info.txt || true
               
-              echo -e "\n=== Connection Summary ===" | tee -a ~/diagnostics/pcap_analysis.txt
-              sudo tcpdump -r ~/diagnostics/github_traffic.pcap -nn -q 2>/dev/null | head -50 | tee -a ~/diagnostics/pcap_analysis.txt || true
+              echo -e "\n=== Connection Summary ===" | tee -a ~/diagnostics/post_checkout_info.txt
+              sudo tcpdump -r ~/diagnostics/github_traffic.pcap -nn -q 2>/dev/null | head -50 | tee -a ~/diagnostics/post_checkout_info.txt || true
             else
-              echo "No valid pcap file found or file is empty" | tee ~/diagnostics/pcap_analysis.txt
+              echo "No valid pcap file found or file is empty" | tee ~/diagnostics/post_checkout_info.txt
             fi
 
       - run:
@@ -342,10 +342,73 @@ jobs:
             echo "=== TCP Statistics Diff ===" >> ~/diagnostics/summary.txt
             
             # Compare before/after TCP stats
-            diff ~/diagnostics/tcp_stats_before.txt ~/diagnostics/tcp_stats_after.txt >> ~/diagnostics/summary.txt || true
+            diff ~/diagnostics/pre_checkout_info.txt ~/diagnostics/post_checkout_info.txt >> ~/diagnostics/summary.txt || true
             
             echo -e "\n=== Key Metrics ===" >> ~/diagnostics/summary.txt
-            grep -E "retransmit|timeout|duplicate" ~/diagnostics/tcp_stats_after.txt >> ~/diagnostics/summary.txt || true
+            grep -E "retransmit|timeout|duplicate" ~/diagnostics/post_checkout_info.txt >> ~/diagnostics/summary.txt || true
+
+      - run:
+          name: Create comprehensive report for engineering
+          command: |
+            cat > ~/diagnostics/ENGINEERING_REPORT.txt << 'EOF'
+            # CircleCI M4 Pro Network Routing Issue Report
+            
+            ## Executive Summary
+            M4 Pro instances route through Europe to reach GitHub, causing 14x slower performance.
+            
+            ## Test Results
+            EOF
+            
+            echo "### Resource Class: << parameters.resource_class >>" >> ~/diagnostics/ENGINEERING_REPORT.txt
+            echo "Date: $(date)" >> ~/diagnostics/ENGINEERING_REPORT.txt
+            echo "" >> ~/diagnostics/ENGINEERING_REPORT.txt
+            
+            # Add checkout duration
+            if [ -f ~/diagnostics/checkout_duration.txt ]; then
+              cat ~/diagnostics/checkout_duration.txt >> ~/diagnostics/ENGINEERING_REPORT.txt
+            fi
+            
+            # Add routing verdict
+            if [ -f ~/diagnostics/known_issues.txt ]; then
+              echo -e "\n### Routing Analysis" >> ~/diagnostics/ENGINEERING_REPORT.txt
+              tail -5 ~/diagnostics/known_issues.txt >> ~/diagnostics/ENGINEERING_REPORT.txt
+            fi
+            
+            # Add traceroute
+            if [ -f ~/diagnostics/traceroute_raw.txt ]; then
+              echo -e "\n### Traceroute Output" >> ~/diagnostics/ENGINEERING_REPORT.txt
+              echo '```' >> ~/diagnostics/ENGINEERING_REPORT.txt
+              cat ~/diagnostics/traceroute_raw.txt >> ~/diagnostics/ENGINEERING_REPORT.txt
+              echo '```' >> ~/diagnostics/ENGINEERING_REPORT.txt
+            fi
+            
+            # Add latency summary
+            if [ -f ~/diagnostics/geo_latency_summary.txt ]; then
+              echo -e "\n### Regional Latency" >> ~/diagnostics/ENGINEERING_REPORT.txt
+              cat ~/diagnostics/geo_latency_summary.txt >> ~/diagnostics/ENGINEERING_REPORT.txt
+            fi
+            
+            # Add network path analysis
+            if [ -f ~/diagnostics/network_path_analysis.txt ]; then
+              echo -e "\n### Network Path Details" >> ~/diagnostics/ENGINEERING_REPORT.txt
+              grep -A5 "Route Analysis Summary" ~/diagnostics/network_path_analysis.txt >> ~/diagnostics/ENGINEERING_REPORT.txt
+            fi
+
+      - run:
+          name: Create comparison data
+          when: always
+          command: |
+            # Create JSON summary for easy comparison
+            cat > ~/diagnostics/summary.json << EOF
+            {
+              "resource_class": "<< parameters.resource_class >>",
+              "checkout_seconds": $(grep -oE '[0-9]+' ~/diagnostics/checkout_duration.txt || echo "null"),
+              "ip_address": "$(curl -s ifconfig.me)",
+              "closest_aws_region": "$(grep -m1 "round-trip" ~/diagnostics/aws_region.txt | cut -d' ' -f3 || echo "unknown")",
+              "has_european_routing": $(grep -q "EUROPEAN ROUTING DETECTED" ~/diagnostics/network_path_analysis.txt && echo "true" || echo "false"),
+              "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            }
+            EOF
 
       - store_artifacts:
           path: ~/diagnostics
